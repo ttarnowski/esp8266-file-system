@@ -6,22 +6,31 @@
 #include <Timer.hpp>
 #include <WiFiManager.hpp>
 
-#define SSID "myssid"
-#define PASSWORD "password"
+#define SSID "VM3549886"
+#define PASSWORD "mc7RsdnxV4qp"
 
 EventDispatcher dispatcher;
 Timer timer;
 ESP8266WiFiMulti wifiMulti;
 WiFiManager wifiManager(&wifiMulti, &dispatcher, &timer, SSID, PASSWORD);
 
-const char *filename = "/file.txt";
+const char *filename = "/file-22.txt";
 
 void readFile() {
   LittleFS.begin();
 
   File file = LittleFS.open(filename, "r");
 
-  Serial.println(file.readString().c_str());
+  Serial.println("File contents: ");
+
+  while (file.available()) {
+    char buf[64];
+
+    size_t bytesRead = file.readBytes(buf, sizeof(buf) - 1);
+    buf[bytesRead] = '\0';
+
+    Serial.print(buf);
+  }
 
   file.close();
 
@@ -39,7 +48,7 @@ void onConnectFinished(wl_status_t status) {
 
   if (!httpClient.begin(
           wifiClient, "http://100daysofcode.s3-website-eu-west-1.amazonaws.com/"
-                      "schedule.txt")) {
+                      "rfc2616.txt")) {
     Serial.println("could not connect to the internet");
     return;
   }
@@ -57,21 +66,42 @@ void onConnectFinished(wl_status_t status) {
     return;
   }
 
-  auto body = httpClient.getString();
-
   LittleFS.begin();
 
   File file = LittleFS.open(filename, "w");
 
-  size_t bytesWritten = file.write(body.c_str());
+  int len = httpClient.getSize();
 
-  if (bytesWritten == 0) {
-    Serial.println("could not write to the file");
-    return;
+  uint8_t buff[128] = {0};
+
+  auto stream = httpClient.getStreamPtr();
+
+  while (httpClient.connected() && (len > 0 || len == -1)) {
+    int c = stream->readBytes(buff, std::min((size_t)len, sizeof(buff)));
+    Serial.printf("readBytes: %d\n", c);
+    if (!c) {
+      Serial.println("read timeout");
+    }
+
+    size_t bytesWritten = file.write(buff, c);
+
+    if (bytesWritten == 0) {
+      Serial.println("could not write to the file");
+      file.close();
+      LittleFS.end();
+      return;
+    }
+
+    if (len > 0) {
+      len -= c;
+    }
   }
 
   file.close();
+
   LittleFS.end();
+
+  httpClient.end();
 
   timer.setTimeout(readFile, 3000);
 }
