@@ -1,72 +1,86 @@
 #include <Arduino.h>
+#include <ESP8266HTTPClient.h>
+#include <ESP8266WiFiMulti.h>
+#include <EventDispatcher.hpp>
 #include <LittleFS.h>
+#include <Timer.hpp>
+#include <WiFiManager.hpp>
 
-const char *filename = "/example-big";
+#define SSID "myssid"
+#define PASSWORD "password"
 
-void setup() {
-  Serial.begin(115200);
+EventDispatcher dispatcher;
+Timer timer;
+ESP8266WiFiMulti wifiMulti;
+WiFiManager wifiManager(&wifiMulti, &dispatcher, &timer, SSID, PASSWORD);
 
-  delay(5000);
+const char *filename = "/file.txt";
 
-  LittleFS.begin();
-
-  if (!LittleFS.exists(filename)) {
-    Serial.println("file does not exist, creating...");
-
-    File file = LittleFS.open(filename, "w");
-
-    if (!file) {
-      Serial.println("could not open the file for writing");
-      LittleFS.end();
-      return;
-    }
-
-    auto bytesWritten = file.write("hello\n");
-
-    Serial.printf("bytes written: %d\n", bytesWritten);
-
-    if (bytesWritten == 0) {
-      Serial.println("could not write to the file");
-    }
-
-    for (int i = 0; i < 2000; i++) {
-      file.write("i am example file content i am example file content i am "
-                 "example file content i am example file ..\n");
-
-      Serial.println(i);
-      yield();
-    }
-
-    file.write("this is the last line\n");
-
-    file.close();
-  }
-
-  LittleFS.end();
-}
-
-void loop() {
+void readFile() {
   LittleFS.begin();
 
   File file = LittleFS.open(filename, "r");
 
-  if (!file) {
-    // handle the error
-  }
-
-  while (file.available()) {
-    char buf[32];
-
-    size_t bytesRead = file.readBytes(buf, sizeof(buf) - 1);
-    buf[bytesRead] = '\0';
-
-    Serial.print(buf);
-
-    yield();
-  }
+  Serial.println(file.readString().c_str());
 
   file.close();
 
   LittleFS.end();
-  delay(5000);
 }
+
+void onConnectFinished(wl_status_t status) {
+  if (status != WL_CONNECTED) {
+    Serial.println("could not connect to WiFi");
+    return;
+  }
+
+  WiFiClient wifiClient;
+  HTTPClient httpClient;
+
+  if (!httpClient.begin(
+          wifiClient, "http://100daysofcode.s3-website-eu-west-1.amazonaws.com/"
+                      "schedule.txt")) {
+    Serial.println("could not connect to the internet");
+    return;
+  }
+
+  int statusCode = httpClient.GET();
+
+  if (statusCode < 0) {
+    Serial.printf("GET failed, error: %s\n",
+                  httpClient.errorToString(statusCode).c_str());
+    return;
+  }
+
+  if (statusCode != HTTP_CODE_OK) {
+    Serial.printf("invalid status code: %d\n", statusCode);
+    return;
+  }
+
+  auto body = httpClient.getString();
+
+  LittleFS.begin();
+
+  File file = LittleFS.open(filename, "w");
+
+  size_t bytesWritten = file.write(body.c_str());
+
+  if (bytesWritten == 0) {
+    Serial.println("could not write to the file");
+    return;
+  }
+
+  file.close();
+  LittleFS.end();
+
+  timer.setTimeout(readFile, 3000);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(5000);
+
+  wifiManager.connect(onConnectFinished);
+}
+
+void loop() { timer.tick(); }
